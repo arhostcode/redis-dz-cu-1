@@ -1,0 +1,131 @@
+@baseUrl = http://localhost:8000
+@playerA = some-person
+@playerB = egor-gulyakin
+
+### 01. Проверка запуска: status = ok, connected_replicas = 2
+GET {{baseUrl}}/health
+
+### 02. Создать профиль SomePerson: level = 5, в ответе есть created_at
+POST {{baseUrl}}/api/players/{{playerA}}
+Content-Type: application/json
+
+{"name": "SomePerson", "level": 5, "region": "EU"}
+
+### 03. Создать профиль EgorGulyakin
+POST {{baseUrl}}/api/players/{{playerB}}
+Content-Type: application/json
+
+{"name": "EgorGulyakin", "level": 3, "region": "US"}
+
+### 04. Первое чтение SomePerson: в заголовках ответа X-Cache: MISS
+GET {{baseUrl}}/api/players/{{playerA}}
+
+### 05. Повторное чтение в течение 60 секунд: X-Cache: HIT
+GET {{baseUrl}}/api/players/{{playerA}}
+
+### 06. Поднять уровень на 2: level = 7, кеш удалён, уведомление отправлено
+PATCH {{baseUrl}}/api/players/{{playerA}}/level
+Content-Type: application/json
+
+{"delta": 2}
+
+### 07. Чтение после изменения: level = 7, X-Cache: MISS
+GET {{baseUrl}}/api/players/{{playerA}}
+
+### 08. Первый вход нового игрока: count = 1, ttl около 86400
+POST {{baseUrl}}/api/players/{{playerA}}/login
+
+### 09. Второй вход: count = 2, TTL не продлевается
+POST {{baseUrl}}/api/players/{{playerA}}/login
+
+### 10. Начислить SomePerson 100 очков
+POST {{baseUrl}}/api/leaderboard/score
+Content-Type: application/json
+
+{"player_id": "{{playerA}}", "score": 100}
+
+### 11. Начислить EgorGulyakin 200 очков
+POST {{baseUrl}}/api/leaderboard/score
+Content-Type: application/json
+
+{"player_id": "{{playerB}}", "score": 200}
+
+### 12. Прибавить SomePerson ещё 50 очков: для нового игрока итог 150
+POST {{baseUrl}}/api/leaderboard/score
+Content-Type: application/json
+
+{"player_id": "{{playerA}}", "score": 50}
+
+### 13. Топ-10 по убыванию очков: EgorGulyakin выше SomePerson
+GET {{baseUrl}}/api/leaderboard/top?limit=10
+
+### 14. Место SomePerson: rank с 1 по убыванию, redis_rank с 0 по возрастанию (ZRANK)
+GET {{baseUrl}}/api/leaderboard/rank/{{playerA}}
+
+### 15. Добавить SomePerson достижение winner: added = true
+POST {{baseUrl}}/api/players/{{playerA}}/achievements
+Content-Type: application/json
+
+{"name": "winner"}
+
+### 16. Добавить SomePerson второе достижение veteran
+POST {{baseUrl}}/api/players/{{playerA}}/achievements
+Content-Type: application/json
+
+{"name": "veteran"}
+
+### 17. Добавить EgorGulyakin достижение winner
+POST {{baseUrl}}/api/players/{{playerB}}/achievements
+Content-Type: application/json
+
+{"name": "winner"}
+
+### 18. Повторно добавить winner для SomePerson: added = false, дубликата нет
+POST {{baseUrl}}/api/players/{{playerA}}/achievements
+Content-Type: application/json
+
+{"name": "winner"}
+
+### 19. Проверить достижение SomePerson: has_achievement = true
+GET {{baseUrl}}/api/players/{{playerA}}/achievements/winner
+
+### 20. Общие достижения SomePerson и EgorGulyakin: achievements = ["winner"]
+GET {{baseUrl}}/api/players/{{playerA}}/achievements/common/{{playerB}}
+
+### 21. Pipeline: создать 20 профилей, в ответе count = 20 и elapsed_ms
+POST {{baseUrl}}/api/players/batch
+Content-Type: application/json
+
+{
+  "players": [
+    {"id": "{{playerA}}-batch-01", "name": "Player 01", "level": 1, "region": "EU"},
+    {"id": "{{playerA}}-batch-02", "name": "Player 02", "level": 2, "region": "EU"},
+    {"id": "{{playerA}}-batch-03", "name": "Player 03", "level": 3, "region": "US"},
+    {"id": "{{playerA}}-batch-04", "name": "Player 04", "level": 4, "region": "US"},
+    {"id": "{{playerA}}-batch-05", "name": "Player 05", "level": 5, "region": "EU"},
+    {"id": "{{playerA}}-batch-06", "name": "Player 06", "level": 6, "region": "EU"},
+    {"id": "{{playerA}}-batch-07", "name": "Player 07", "level": 7, "region": "US"},
+    {"id": "{{playerA}}-batch-08", "name": "Player 08", "level": 8, "region": "US"},
+    {"id": "{{playerA}}-batch-09", "name": "Player 09", "level": 9, "region": "EU"},
+    {"id": "{{playerA}}-batch-10", "name": "Player 10", "level": 10, "region": "EU"},
+    {"id": "{{playerA}}-batch-11", "name": "Player 11", "level": 1, "region": "US"},
+    {"id": "{{playerA}}-batch-12", "name": "Player 12", "level": 2, "region": "US"},
+    {"id": "{{playerA}}-batch-13", "name": "Player 13", "level": 3, "region": "EU"},
+    {"id": "{{playerA}}-batch-14", "name": "Player 14", "level": 4, "region": "EU"},
+    {"id": "{{playerA}}-batch-15", "name": "Player 15", "level": 5, "region": "US"},
+    {"id": "{{playerA}}-batch-16", "name": "Player 16", "level": 6, "region": "US"},
+    {"id": "{{playerA}}-batch-17", "name": "Player 17", "level": 7, "region": "EU"},
+    {"id": "{{playerA}}-batch-18", "name": "Player 18", "level": 8, "region": "EU"},
+    {"id": "{{playerA}}-batch-19", "name": "Player 19", "level": 9, "region": "US"},
+    {"id": "{{playerA}}-batch-20", "name": "Player 20", "level": 10, "region": "US"}
+  ]
+}
+
+### 22. Проверка записи при failover и паузе реплик
+POST {{baseUrl}}/api/players/{{playerA}}-ha
+Content-Type: application/json
+
+{"name": "Failover check", "level": 1, "region": "EU"}
+
+### 23. Проверка восстановления: новый master, connected_replicas = 2
+GET {{baseUrl}}/health

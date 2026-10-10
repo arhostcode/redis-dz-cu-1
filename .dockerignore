@@ -1,0 +1,14 @@
+.git
+.venv
+.idea
+*.iml
+.http-client
+http-client.private.env.json
+__pycache__
+.pytest_cache
+.ruff_cache
+artifacts
+*.pdf
+.DS_Store
+.local
+docker-compose.override.yml

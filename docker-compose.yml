@@ -1,0 +1,168 @@
+name: gamehub
+
+x-redis: &redis
+  image: redis:7.4.9-alpine
+  restart: unless-stopped
+  command:
+    - sh
+    - -ec
+    - |
+      if [ ! -f /data/redis.conf ]; then
+        cp /etc/gamehub/redis.conf /data/redis.conf
+        printf '\nreplica-announce-ip %s\n' "$$REDIS_HOSTNAME" >> /data/redis.conf
+        if [ "$${REDIS_INITIAL_REPLICA:-0}" = "1" ]; then
+          printf 'replicaof redis-master 6379\n' >> /data/redis.conf
+        fi
+      fi
+      exec /usr/local/bin/docker-entrypoint.sh redis-server /data/redis.conf
+  networks: [gamehub]
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 3s
+    timeout: 2s
+    retries: 20
+  stop_grace_period: 20s
+
+x-sentinel: &sentinel
+  image: redis:7.4.9-alpine
+  restart: unless-stopped
+  command:
+    - sh
+    - -ec
+    - |
+      if [ ! -f /data/sentinel.conf ]; then
+        cp /etc/gamehub/sentinel.conf /data/sentinel.conf
+        printf '\nsentinel announce-ip %s\n' "$$SENTINEL_HOSTNAME" >> /data/sentinel.conf
+        printf 'sentinel announce-port 26379\n' >> /data/sentinel.conf
+      fi
+      exec /usr/local/bin/docker-entrypoint.sh redis-server /data/sentinel.conf --sentinel
+  networks: [gamehub]
+  depends_on:
+    redis-master:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+    interval: 3s
+    timeout: 2s
+    retries: 20
+
+x-app: &app
+  build:
+    context: .
+  image: gamehub-api:local
+  restart: unless-stopped
+  networks: [gamehub]
+  environment:
+    REDIS_SENTINELS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+    REDIS_MASTER_NAME: mymaster
+    REDIS_SOCKET_TIMEOUT: "3"
+    REDIS_CONNECT_TIMEOUT: "1"
+    REDIS_STARTUP_TIMEOUT: "90"
+
+services:
+  redis-master:
+    <<: *redis
+    container_name: redis-master
+    environment:
+      REDIS_HOSTNAME: redis-master
+    ports: ["127.0.0.1:6379:6379"]
+    volumes:
+      - master-data:/data
+      - ./config/redis.conf:/etc/gamehub/redis.conf:ro
+
+  redis-replica-1:
+    <<: *redis
+    container_name: redis-replica-1
+    environment:
+      REDIS_HOSTNAME: redis-replica-1
+      REDIS_INITIAL_REPLICA: "1"
+    ports: ["127.0.0.1:6380:6379"]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - replica-1-data:/data
+      - ./config/redis.conf:/etc/gamehub/redis.conf:ro
+
+  redis-replica-2:
+    <<: *redis
+    container_name: redis-replica-2
+    environment:
+      REDIS_HOSTNAME: redis-replica-2
+      REDIS_INITIAL_REPLICA: "1"
+    ports: ["127.0.0.1:6381:6379"]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    volumes:
+      - replica-2-data:/data
+      - ./config/redis.conf:/etc/gamehub/redis.conf:ro
+
+  sentinel-1:
+    <<: *sentinel
+    container_name: sentinel-1
+    environment:
+      SENTINEL_HOSTNAME: sentinel-1
+    ports: ["127.0.0.1:26379:26379"]
+    volumes:
+      - sentinel-1-data:/data
+      - ./config/sentinel.conf:/etc/gamehub/sentinel.conf:ro
+
+  sentinel-2:
+    <<: *sentinel
+    container_name: sentinel-2
+    environment:
+      SENTINEL_HOSTNAME: sentinel-2
+    ports: ["127.0.0.1:26380:26379"]
+    volumes:
+      - sentinel-2-data:/data
+      - ./config/sentinel.conf:/etc/gamehub/sentinel.conf:ro
+
+  sentinel-3:
+    <<: *sentinel
+    container_name: sentinel-3
+    environment:
+      SENTINEL_HOSTNAME: sentinel-3
+    ports: ["127.0.0.1:26381:26379"]
+    volumes:
+      - sentinel-3-data:/data
+      - ./config/sentinel.conf:/etc/gamehub/sentinel.conf:ro
+
+  app:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      sentinel-1:
+        condition: service_healthy
+      sentinel-2:
+        condition: service_healthy
+      sentinel-3:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      retries: 20
+      start_period: 10s
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+networks:
+  gamehub:
+
+volumes:
+  master-data:
+  replica-1-data:
+  replica-2-data:
+  sentinel-1-data:
+  sentinel-2-data:
+  sentinel-3-data:
